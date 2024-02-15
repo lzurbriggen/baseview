@@ -1,8 +1,6 @@
 use std::marker::PhantomData;
 
-use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
-};
+use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 
 use crate::event::{Event, EventStatus};
 use crate::window_open_options::WindowOpenOptions;
@@ -16,13 +14,13 @@ use crate::win as platform;
 use crate::x11 as platform;
 
 pub struct WindowHandle {
-    window_handle: platform::WindowHandle,
+    window_handle: platform::BaseviewWindowHandle,
     // so that WindowHandle is !Send on all platforms
     phantom: PhantomData<*mut ()>,
 }
 
 impl WindowHandle {
-    fn new(window_handle: platform::WindowHandle) -> Self {
+    fn new(window_handle: platform::BaseviewWindowHandle) -> Self {
         Self { window_handle, phantom: PhantomData::default() }
     }
 
@@ -38,9 +36,9 @@ impl WindowHandle {
     }
 }
 
-unsafe impl HasRawWindowHandle for WindowHandle {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        self.window_handle.raw_window_handle()
+impl HasWindowHandle for WindowHandle {
+    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, HandleError> {
+        self.window_handle.window_handle()
     }
 }
 
@@ -69,7 +67,7 @@ impl<'a> Window<'a> {
 
     pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
     where
-        P: HasRawWindowHandle,
+        P: HasWindowHandle,
         H: WindowHandler + 'static,
         B: FnOnce(&mut Window) -> H,
         B: Send + 'static,
@@ -110,14 +108,18 @@ impl<'a> Window<'a> {
     }
 }
 
-unsafe impl<'a> HasRawWindowHandle for Window<'a> {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        self.window.raw_window_handle()
+impl<'a> HasWindowHandle for Window<'a> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.window.window_handle()
     }
 }
 
-unsafe impl<'a> HasRawDisplayHandle for Window<'a> {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        self.window.raw_display_handle()
+impl<'a> HasDisplayHandle for Window<'a> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.window.display_handle()
     }
 }
