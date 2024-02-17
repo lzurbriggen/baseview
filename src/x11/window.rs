@@ -24,13 +24,13 @@ use super::keyboard::{convert_key_press_event, convert_key_release_event, key_mo
 #[cfg(feature = "opengl")]
 use crate::gl::{platform, GlContext};
 
-pub struct BaseviewWindowHandle {
+pub struct WindowHandle {
     raw_window_handle: Option<RawWindowHandle>,
     close_requested: Arc<AtomicBool>,
     is_open: Arc<AtomicBool>,
 }
 
-impl BaseviewWindowHandle {
+impl WindowHandle {
     pub fn close(&mut self) {
         if self.raw_window_handle.take().is_some() {
             // FIXME: This will need to be changed from just setting an atomic to somehow
@@ -46,7 +46,7 @@ impl BaseviewWindowHandle {
     }
 }
 
-impl HasWindowHandle for BaseviewWindowHandle {
+impl HasWindowHandle for WindowHandle {
     fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, HandleError> {
         if let Some(raw_window_handle) = self.raw_window_handle {
             if self.is_open.load(Ordering::Relaxed) {
@@ -65,11 +65,11 @@ struct ParentHandle {
 }
 
 impl ParentHandle {
-    pub fn new() -> (Self, BaseviewWindowHandle) {
+    pub fn new() -> (Self, WindowHandle) {
         let close_requested = Arc::new(AtomicBool::new(false));
         let is_open = Arc::new(AtomicBool::new(true));
 
-        let handle = BaseviewWindowHandle {
+        let handle = WindowHandle {
             raw_window_handle: None,
             close_requested: Arc::clone(&close_requested),
             is_open: Arc::clone(&is_open),
@@ -118,9 +118,7 @@ unsafe impl Send for SendableRwh {}
 type WindowOpenResult = Result<SendableRwh, ()>;
 
 impl<'a> Window<'a> {
-    pub fn open_parented<P, H, B>(
-        parent: &P, options: WindowOpenOptions, build: B,
-    ) -> BaseviewWindowHandle
+    pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
     where
         P: HasWindowHandle,
         H: WindowHandler + 'static,

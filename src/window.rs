@@ -14,13 +14,13 @@ use crate::win as platform;
 use crate::x11 as platform;
 
 pub struct WindowHandle {
-    window_handle: platform::BaseviewWindowHandle,
+    window_handle: platform::WindowHandle,
     // so that WindowHandle is !Send on all platforms
     phantom: PhantomData<*mut ()>,
 }
 
 impl WindowHandle {
-    fn new(window_handle: platform::BaseviewWindowHandle) -> Self {
+    fn new(window_handle: platform::WindowHandle) -> Self {
         Self { window_handle, phantom: PhantomData::default() }
     }
 

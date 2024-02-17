@@ -20,7 +20,7 @@ use winapi::um::winuser::{
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::VecDeque;
-use std::ffi::{c_void, OsStr};
+use std::ffi::OsStr;
 use std::num::NonZeroIsize;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
@@ -65,12 +65,12 @@ unsafe fn generate_guid() -> String {
 
 const WIN_FRAME_TIMER: usize = 4242;
 
-pub struct BaseviewWindowHandle {
+pub struct WindowHandle {
     hwnd: Option<HWND>,
     is_open: Rc<Cell<bool>>,
 }
 
-impl BaseviewWindowHandle {
+impl WindowHandle {
     pub fn close(&mut self) {
         if let Some(hwnd) = self.hwnd.take() {
             unsafe {
@@ -84,7 +84,7 @@ impl BaseviewWindowHandle {
     }
 }
 
-impl HasWindowHandle for BaseviewWindowHandle {
+impl HasWindowHandle for WindowHandle {
     fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, HandleError> {
         if let Some(hwnd) = self.hwnd {
             let handle = Win32WindowHandle::new(NonZeroIsize::new(hwnd as isize).unwrap());
@@ -102,10 +102,10 @@ struct ParentHandle {
 }
 
 impl ParentHandle {
-    pub fn new(hwnd: HWND) -> (Self, BaseviewWindowHandle) {
+    pub fn new(hwnd: HWND) -> (Self, WindowHandle) {
         let is_open = Rc::new(Cell::new(true));
 
-        let handle = BaseviewWindowHandle { hwnd: Some(hwnd), is_open: Rc::clone(&is_open) };
+        let handle = WindowHandle { hwnd: Some(hwnd), is_open: Rc::clone(&is_open) };
 
         (Self { is_open }, handle)
     }
@@ -534,9 +534,7 @@ pub struct Window<'a> {
 }
 
 impl Window<'_> {
-    pub fn open_parented<P, H, B>(
-        parent: &P, options: WindowOpenOptions, build: B,
-    ) -> BaseviewWindowHandle
+    pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
     where
         P: HasWindowHandle,
         H: WindowHandler + 'static,
@@ -579,7 +577,7 @@ impl Window<'_> {
 
     fn open<H, B>(
         parented: bool, parent: HWND, options: WindowOpenOptions, build: B,
-    ) -> (BaseviewWindowHandle, HWND)
+    ) -> (WindowHandle, HWND)
     where
         H: WindowHandler + 'static,
         B: FnOnce(&mut crate::Window) -> H,
