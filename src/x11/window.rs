@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -6,8 +7,8 @@ use std::thread;
 use std::time::*;
 
 use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle, XlibDisplayHandle,
-    XlibWindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 use xcb::ffi::xcb_screen_t;
 use xcb::StructPtr;
@@ -23,13 +24,13 @@ use super::keyboard::{convert_key_press_event, convert_key_release_event, key_mo
 #[cfg(feature = "opengl")]
 use crate::gl::{platform, GlContext};
 
-pub struct WindowHandle {
+pub struct BaseviewWindowHandle {
     raw_window_handle: Option<RawWindowHandle>,
     close_requested: Arc<AtomicBool>,
     is_open: Arc<AtomicBool>,
 }
 
-impl WindowHandle {
+impl BaseviewWindowHandle {
     pub fn close(&mut self) {
         if self.raw_window_handle.take().is_some() {
             // FIXME: This will need to be changed from just setting an atomic to somehow
@@ -45,15 +46,16 @@ impl WindowHandle {
     }
 }
 
-unsafe impl HasRawWindowHandle for WindowHandle {
-    fn raw_window_handle(&self) -> RawWindowHandle {
+impl HasWindowHandle for BaseviewWindowHandle {
+    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, HandleError> {
         if let Some(raw_window_handle) = self.raw_window_handle {
             if self.is_open.load(Ordering::Relaxed) {
-                return raw_window_handle;
+                return Ok(unsafe {
+                    raw_window_handle::WindowHandle::borrow_raw(raw_window_handle)
+                });
             }
         }
-
-        RawWindowHandle::Xlib(XlibWindowHandle::empty())
+        Err(HandleError::Unavailable)
     }
 }
 
@@ -63,11 +65,11 @@ struct ParentHandle {
 }
 
 impl ParentHandle {
-    pub fn new() -> (Self, WindowHandle) {
+    pub fn new() -> (Self, BaseviewWindowHandle) {
         let close_requested = Arc::new(AtomicBool::new(false));
         let is_open = Arc::new(AtomicBool::new(true));
 
-        let handle = WindowHandle {
+        let handle = BaseviewWindowHandle {
             raw_window_handle: None,
             close_requested: Arc::clone(&close_requested),
             is_open: Arc::clone(&is_open),
@@ -91,7 +93,6 @@ struct WindowInner {
     xcb_connection: XcbConnection,
     window_id: u32,
     window_info: WindowInfo,
-    visual_id: u32,
     mouse_cursor: MouseCursor,
 
     frame_interval: Duration,
@@ -117,17 +118,19 @@ unsafe impl Send for SendableRwh {}
 type WindowOpenResult = Result<SendableRwh, ()>;
 
 impl<'a> Window<'a> {
-    pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
+    pub fn open_parented<P, H, B>(
+        parent: &P, options: WindowOpenOptions, build: B,
+    ) -> BaseviewWindowHandle
     where
-        P: HasRawWindowHandle,
+        P: HasWindowHandle,
         H: WindowHandler + 'static,
         B: FnOnce(&mut crate::Window) -> H,
         B: Send + 'static,
     {
         // Convert parent into something that X understands
-        let parent_id = match parent.raw_window_handle() {
+        let parent_id = match parent.window_handle().unwrap().as_raw() {
             RawWindowHandle::Xlib(h) => h.window as u32,
-            RawWindowHandle::Xcb(h) => h.window,
+            RawWindowHandle::Xcb(h) => h.window.get(),
             h => panic!("unsupported parent handle type {:?}", h),
         };
 
@@ -140,7 +143,7 @@ impl<'a> Window<'a> {
         });
 
         let raw_window_handle = rx.recv().unwrap().unwrap();
-        window_handle.raw_window_handle = Some(raw_window_handle.0);
+        window_handle.raw_window_handle = Some(raw_window_handle.0.into());
 
         window_handle
     }
@@ -319,7 +322,6 @@ impl<'a> Window<'a> {
             xcb_connection,
             window_id,
             window_info,
-            visual_id: visual,
             mouse_cursor: MouseCursor::default(),
 
             frame_interval: Duration::from_millis(15),
@@ -341,7 +343,8 @@ impl<'a> Window<'a> {
         // the correct dpi scaling.
         handler.on_event(&mut window, Event::Window(WindowEvent::Resized(window_info)));
 
-        let _ = tx.send(Ok(SendableRwh(window.raw_window_handle())));
+        let window_handle = window.window_handle().unwrap();
+        let _ = tx.send(Ok(SendableRwh(window_handle.as_raw())));
 
         inner.run_event_loop(&mut handler);
     }
@@ -699,26 +702,21 @@ impl WindowInner {
     }
 }
 
-unsafe impl<'a> HasRawWindowHandle for Window<'a> {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let mut handle = XlibWindowHandle::empty();
-
-        handle.window = self.inner.window_id.into();
-        handle.visual_id = self.inner.visual_id.into();
-
-        RawWindowHandle::Xlib(handle)
+impl<'a> HasWindowHandle for Window<'a> {
+    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, HandleError> {
+        let handle = XlibWindowHandle::new(self.inner.window_id.into());
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Xlib(handle)) })
     }
 }
 
-unsafe impl<'a> HasRawDisplayHandle for Window<'a> {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
+impl<'a> HasDisplayHandle for Window<'a> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let display = self.inner.xcb_connection.conn.get_raw_dpy();
-        let mut handle = XlibDisplayHandle::empty();
+        let handle = XlibDisplayHandle::new(NonNull::new(display as *mut c_void), unsafe {
+            x11::xlib::XDefaultScreen(display)
+        });
 
-        handle.display = display as *mut c_void;
-        handle.screen = unsafe { x11::xlib::XDefaultScreen(display) };
-
-        RawDisplayHandle::Xlib(handle)
+        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(handle)) })
     }
 }
 
