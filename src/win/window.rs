@@ -760,6 +760,8 @@ impl Window<'_> {
     }
 }
 
+unsafe impl Sync for Window<'_>{}
+
 impl HasWindowHandle for Window<'_> {
     fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, HandleError> {
         let handle = Win32WindowHandle::new(NonZeroIsize::new(self.state.hwnd as isize).unwrap());
